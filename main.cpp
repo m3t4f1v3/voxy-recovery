@@ -199,8 +199,8 @@ void RocksDBHandler::processWorldSections() {
             std::cout << "World Section Deserialized Successfully:" << std::endl;
             std::cout << "Key: " << id << std::endl;
             // Access section.data here
-            writeVectorToFile(section.data, "test.dat");
-            exit(-1);
+            // writeVectorToFile(section.data, "test.dat");
+            // exit(-1);
         }
     }
 
