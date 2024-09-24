@@ -8,10 +8,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Specify the path to RocksDB
 set(ROCKSDB_ROOT "${CMAKE_SOURCE_DIR}/rocksdb")
 
+option(NBT_BUILD_SHARED "Build shared libraries" OFF) # i believe im allowed to do this
+option(NBT_USE_ZLIB "Build additional zlib stream functionality" ON)
+option(NBT_BUILD_TESTS "Build the unit tests. Requires CxxTest." OFF)
+
+add_subdirectory(libnbtplusplus)
+
 # Find the Zstandard library (ZSTD)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED libzstd)
-find_package(ZLIB)
+# find_package(ZLIB)
 
 # Add the executable (main.cpp)
 add_executable(VoxyRecovery main.cpp)
@@ -26,7 +32,8 @@ target_include_directories(VoxyRecovery PRIVATE
 target_link_libraries(VoxyRecovery PRIVATE
     ${ROCKSDB_ROOT}/librocksdb.so   # Use static library of RocksDB
     ${ZSTD_LIBRARIES}
-    ZLIB::ZLIB
+    # ZLIB::ZLIB
+    nbt++
 )
 
 # Optionally, specify RocksDB compilation flags
