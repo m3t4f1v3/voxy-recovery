@@ -8,33 +8,79 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Specify the path to RocksDB
 set(ROCKSDB_ROOT "${CMAKE_SOURCE_DIR}/rocksdb")
 
-option(NBT_BUILD_SHARED "Build shared libraries" OFF) # i believe im allowed to do this
+option(NBT_BUILD_SHARED "Build shared libraries" OFF)
 option(NBT_USE_ZLIB "Build additional zlib stream functionality" ON)
 option(NBT_BUILD_TESTS "Build the unit tests. Requires CxxTest." OFF)
 
-add_subdirectory(libnbtplusplus)
+# Enable RocksDB Snappy compression
+set(WITH_SNAPPY ON CACHE BOOL "Enable Snappy compression support in RocksDB" FORCE)
+
+# Disable RocksDB tests
+set(WITH_TESTS OFF CACHE BOOL "Disable RocksDB tests" FORCE)
+set(WITH_BENCHMARK_TOOLS OFF CACHE BOOL "Disable RocksDB benchmark tools" FORCE)
+
+# Find the Snappy library
+find_package(Snappy REQUIRED)
 
 # Find the Zstandard library (ZSTD)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED libzstd)
-# find_package(ZLIB)
+
+add_subdirectory(libnbtplusplus)
+
+set(FAIL_ON_WARNINGS OFF)  # Disable warnings as errors
+set(DEBUG_LEVEL 0)                  # Set debug level
+set(ROCKSDB_BUILD_SHARED OFF)              # Library mode (shared or static)
+set(WITH_TESTS OFF)
+add_subdirectory(rocksdb)
+
+# add_definitions(-w) # ignore the YAP
 
 # Add the executable (main.cpp)
 add_executable(VoxyRecovery main.cpp)
 
-# Include RocksDB and ZSTD directories
+# Include RocksDB, ZSTD, and Snappy directories
 target_include_directories(VoxyRecovery PRIVATE
     ${ROCKSDB_ROOT}/include
     ${ZSTD_INCLUDE_DIRS}
+    ${Snappy_INCLUDE_DIRS}
 )
 
-# Link RocksDB and ZSTD libraries
+# Link RocksDB, ZSTD, and Snappy libraries
 target_link_libraries(VoxyRecovery PRIVATE
-    ${ROCKSDB_ROOT}/librocksdb.so   # Use static library of RocksDB
     ${ZSTD_LIBRARIES}
-    # ZLIB::ZLIB
+    ${Snappy_LIBRARIES}
+    rocksdb
     nbt++
 )
 
-# Optionally, specify RocksDB compilation flags
-# target_compile_options(VoxyRecovery PRIVATE -pthread -lz -lbz2 -lsnappy)
+# Apply the configuration options
+if(DISABLE_WARNING_AS_ERROR)
+    message(STATUS "Disabling warnings as errors")
+    add_compile_options(-Wno-error)
+endif()
+
+# Set debug level
+message(STATUS "Setting debug level to ${DEBUG_LEVEL}")
+add_compile_options(-DDEBUG_LEVEL=${DEBUG_LEVEL})
+
+# Set library mode (shared or static)
+if(LIB_MODE STREQUAL "shared")
+    message(STATUS "Building in shared library mode")
+    set(BUILD_SHARED_LIBS ON)
+else()
+    message(STATUS "Building in static library mode")
+    set(BUILD_SHARED_LIBS OFF)
+endif()
+
+# Enable LTO if specified
+if(USE_LTO)
+    message(STATUS "Enabling LTO (Link-Time Optimization)")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+endif()
+
+# Enable RTTI if specified
+if(USE_RTTI)
+    message(STATUS "Enabling RTTI (Run-Time Type Information)")
+    add_compile_options(-frtti)
+endif()
