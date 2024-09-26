@@ -1,6 +1,6 @@
 [submodule "rocksdb"]
 	path = rocksdb
 	url = https://github.com/facebook/rocksdb
-[submodule "libnbtplusplus"]
-	path = libnbtplusplus
-	url = https://github.com/PrismLauncher/libnbtplusplus
+[submodule "nbt-cpp"]
+	path = nbt-cpp
+	url = https://github.com/SpockBotMC/cpp-nbt
