@@ -1,12 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 project(VoxyRecovery)
 
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 23)
+# Set C++ standard (optional, depending on your project)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-
-# Specify the path to RocksDB
-set(ROCKSDB_ROOT "${CMAKE_SOURCE_DIR}/rocksdb")
 
 # Enable RocksDB Snappy compression
 set(WITH_SNAPPY ON CACHE BOOL "Enable Snappy compression support in RocksDB" FORCE)
@@ -22,26 +19,38 @@ find_package(Snappy REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED libzstd)
 
-# Additional configuration options
-option(FAIL_ON_WARNINGS OFF) # Disable warnings as errors
-option(DEBUG_LEVEL 0) # Set debug level
-option(ROCKSDB_BUILD_SHARED OFF) # Library mode (shared or static)
-option(WITH_TESTS OFF)
+set(FAIL_ON_WARNINGS OFF)  # Disable warnings as errors
+set(DEBUG_LEVEL 0)                  # Set debug level
+set(ROCKSDB_BUILD_SHARED OFF)              # Library mode (shared or static)
+set(WITH_TESTS OFF)
 add_subdirectory(rocksdb)
+
+option(NBT_BUILD_SHARED "Build shared libraries" OFF)
+option(NBT_USE_ZLIB "Build additional zlib stream functionality" ON)
+option(NBT_BUILD_TESTS "Build the unit tests. Requires CxxTest." OFF)
+
+add_subdirectory(libnbtplusplus)
+
+# add_definitions(-w) # ignore the YAP
 
 # Add the executable (main.cpp)
 add_executable(VoxyRecovery main.cpp)
 
+# Include RocksDB, ZSTD, and Snappy directories
 target_include_directories(VoxyRecovery PRIVATE
-    ${ROCKSDB_ROOT}/include
+    ${rocksdb_SOURCE_DIR}/include
     ${ZSTD_INCLUDE_DIRS}
     ${Snappy_INCLUDE_DIRS}
+    ${libnbt++_SOURCE_DIR}/include
+    ${libnbt++_BINARY_DIR}
 )
 
+# Link RocksDB, ZSTD, and Snappy libraries
 target_link_libraries(VoxyRecovery PRIVATE
     ${ZSTD_LIBRARIES}
     ${Snappy_LIBRARIES}
     rocksdb
+    nbt++
 )
 
 # Apply the configuration options
@@ -53,15 +62,6 @@ endif()
 # Set debug level
 message(STATUS "Setting debug level to ${DEBUG_LEVEL}")
 add_compile_options(-DDEBUG_LEVEL=${DEBUG_LEVEL})
-
-# Set library mode (shared or static)
-if(LIB_MODE STREQUAL "shared")
-    message(STATUS "Building in shared library mode")
-    set(BUILD_SHARED_LIBS ON)
-else()
-    message(STATUS "Building in static library mode")
-    set(BUILD_SHARED_LIBS OFF)
-endif()
 
 # Enable LTO if specified
 if(USE_LTO)
