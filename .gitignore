@@ -37,3 +37,6 @@ build/
 # ignore source
 voxy/
 .voxy/
+
+# ignore testing data
+empty/

@@ -11,6 +11,7 @@
 #include <sstream>
 #include <iomanip>
 #include <nbt_tags.h>
+#include <filesystem>
 
 struct WorldSection
 {
@@ -375,7 +376,7 @@ void RocksDBHandler::processWorldSections()
       // id = __builtin_bswap64(id);
       // id = 0x90000010000170;
       // std::cout << "World " << getLevel(bswap_id) << ": x=" << getX(bswap_id) << ", y=" << getY(bswap_id) << ", z=" << getZ(bswap_id) << std::endl;
-      if (getLevel(bswap_id) == 0) // we are only interested in the 0'th LOD
+      if (getLevel(bswap_id) == 0) // we are only interested in the zeroth LOD, idk why its stored in getLevel
       {
         for (int x = 0; x < 32; x++)
         {
@@ -395,11 +396,76 @@ void RocksDBHandler::processWorldSections()
 
               if (bid != 0)
               {
-                std::cout << "World " << getLevel(bswap_id) << ": x=" << getX(bswap_id) * 32 + x << ", y=" << getY(bswap_id) * 32 + y << ", z=" << getZ(bswap_id) * 32 + z << std::endl;
+                // std::cout << "World " << getLevel(bswap_id) << ": x=" << getX(bswap_id) * 32 + x << ", y=" << getY(bswap_id) * 32 + y << ", z=" << getZ(bswap_id) * 32 + z << std::endl;
                 // std::cout << "x: " << x << " y: " << y << " z: " << z << std::endl;
                 // std::cout << bid << std::endl;
                 // std::cout << section.data[getIndex(x, y, z)] << std::endl;
-                std::cout << mappings[bid] << std::endl;
+                // std::cout << mappings[bid] << std::endl;
+                nbt::tag_compound &block = mappings[bid].as<nbt::tag_compound>();
+                // std::cout << block.at("Name") << std::endl;
+                // std::cout << block << std::endl;
+                std::cout << "{";
+
+                std::cout << '"' << "x" << '"' << ":" << getX(bswap_id) * 32 + x << ",";
+                std::cout << '"' << "y" << '"' << ":" << getY(bswap_id) * 32 + y << ",";
+                std::cout << '"' << "z" << '"' << ":" << getZ(bswap_id) * 32 + z << ",";
+
+                for (const auto &kv : block)
+                {
+                  if (kv.first == "Properties")
+                  {
+                    std::cout << '"' << "Properties" << '"' << ":{";
+                    const auto &properties = block.at("Properties").as<nbt::tag_compound>();
+                    auto it = properties.begin();
+                    while (it != properties.end())
+                    {
+                      std::cout << '"' << it->first << '"' << ":" << it->second;
+                      ++it;
+                      if (it != properties.end())
+                      {
+                        std::cout << ",";
+                      }
+                      // std::cout << std::endl;
+                    }
+                    std::cout << "}"; // No comma here, we will handle it later
+                  }
+                  else
+                  {
+                    std::cout << '"' << kv.first << '"' << ":" << kv.second;
+                  }
+
+                  // Add a comma if there are more elements or properties
+                  if (kv.first != "Properties" && block.has_key("Properties"))
+                  {
+                    std::cout << ",";
+                  }
+                }
+
+                // Remove trailing comma after the last element
+                std::cout << "}" << std::endl;
+
+                // nasty
+                // try
+                // {
+                //   // std::size_t i = 0;
+                //   std::cout << block.at("Name") << std::endl;
+                //   std::cout << block.at("Properties") << std::endl;
+                // }
+                // catch (const std::out_of_range &e)
+                // {
+                //   // std::cerr << e.what() << std::endl;
+                //   // Handle type mismatch silently
+                // }
+                // catch (const std::bad_cast &e)
+                // {
+                //   std::cerr << e.what() << std::endl;
+                //   std::cout << block << std::endl;
+                //   // Handle the case where the type is not correct
+                // }
+                // catch (std::exception e)
+                // {
+                //   std::cerr << e.what() << std::endl;
+                // }
               }
             }
           }
@@ -509,14 +575,29 @@ int main()
   // exit(-1);
   try
   {
-    RocksDBHandler dbHandler(
-        "/home/edward_wong/.local/share/PrismLauncher/instances/voxy testing/minecraft/saves/empty/voxy/5e08f4cd49c6e5fae140ae6a9bc4228f/storage/");
+    std::string basePath = "../.voxy/saves/89.168.27.174/";
+
+    // Iterate through all directories in the base path
+    for (const auto &entry : std::filesystem::directory_iterator(basePath)) {
+        if (std::filesystem::is_directory(entry)) {
+            std::string storagePath = entry.path().string() + "/storage/";
+
+            // Create a RocksDBHandler for each folder
+            RocksDBHandler dbHandler(storagePath);
+
+            // Read ID mappings and process world sections
+            dbHandler.readIdMappings();
+            dbHandler.processWorldSections();
+        }
+    }
+    // RocksDBHandler dbHandler(
+    //     // "/home/edward_wong/.local/share/PrismLauncher/instances/voxy testing/minecraft/saves/empty/voxy/5e08f4cd49c6e5fae140ae6a9bc4228f/storage/");
     // "../.voxy/saves/89.168.27.174/8c3bc415b64e63ed06e5296642cddd71/storage/");
 
-    dbHandler.readIdMappings();
+    // dbHandler.readIdMappings();
     // std::cout << mappings.size() << std::endl;
     // exit(-1);
-    dbHandler.processWorldSections();
+    // dbHandler.processWorldSections();
     // dbHandler.readIdMappings();
   }
   catch (const std::exception &e)
