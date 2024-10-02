@@ -35,6 +35,7 @@ add_subdirectory(libnbtplusplus)
 
 # Add the executable (main.cpp)
 add_executable(VoxyRecovery main.cpp)
+add_executable(VoxyRecoveryTesting testing.cpp)
 
 # Include RocksDB, ZSTD, and Snappy directories
 target_include_directories(VoxyRecovery PRIVATE
@@ -50,6 +51,18 @@ target_link_libraries(VoxyRecovery PRIVATE
     ${ZSTD_LIBRARIES}
     ${Snappy_LIBRARIES}
     rocksdb
+    nbt++
+)
+
+target_include_directories(VoxyRecoveryTesting PRIVATE
+    ${ZSTD_INCLUDE_DIRS}
+    ${libnbt++_SOURCE_DIR}/include
+    ${libnbt++_BINARY_DIR}
+)
+
+# Link RocksDB, ZSTD, and Snappy libraries
+target_link_libraries(VoxyRecoveryTesting PRIVATE
+    ${ZSTD_LIBRARIES}
     nbt++
 )
 
