@@ -15,6 +15,10 @@
 #include <io/ozlibstream.h>
 #include <format>
 #include <thread>
+#include <condition_variable>
+#include <future>
+#include <mutex>
+#include <queue>
 
 struct WorldSection
 {
@@ -563,10 +567,9 @@ void RocksDBHandler::processWorldSection(const int64_t &key, const std::string &
 
                 std::cout << "{";
 
-                std::cout << '"' << "x" << '"' << ":" << getX(key) * 32
-                + x << ","; std::cout << '"' << "y" << '"' << ":" <<
-                getY(key) * 32 + y << ","; std::cout << '"' << "z" <<
-                '"' << ":" << getZ(key) * 32 + z << ",";
+                std::cout << '"' << "x" << '"' << ":" << getX(key) * 32 + x << ",";
+                std::cout << '"' << "y" << '"' << ":" << getY(key) * 32 + y << ",";
+                std::cout << '"' << "z" << '"' << ":" << getZ(key) * 32 + z << ",";
 
                 for (const auto &kv : block)
                 {
@@ -574,11 +577,13 @@ void RocksDBHandler::processWorldSection(const int64_t &key, const std::string &
                   {
                     std::cout << '"' << "Properties" << '"' << ":{";
                     const auto &properties =
-                    block.at("Properties").as<nbt::tag_compound>(); auto it =
-                    properties.begin(); while (it != properties.end())
+                        block.at("Properties").as<nbt::tag_compound>();
+                    auto it =
+                        properties.begin();
+                    while (it != properties.end())
                     {
-                      std::cout << '"' << it->first << '"' << ":" <<
-                      it->second;
+                      // std::cout << '"' << it->first << '"' << ":[" << it->second << "," << '"' << it->second.get_type() << '"' << "]";
+                      std::cout << '"' << it->first << '"' << ":" << it->second;
                       ++it;
                       if (it != properties.end())
                       {
@@ -595,7 +600,7 @@ void RocksDBHandler::processWorldSection(const int64_t &key, const std::string &
 
                   // Add a comma if there are more elements or properties
                   if (kv.first != "Properties" &&
-                  block.has_key("Properties"))
+                      block.has_key("Properties"))
                   {
                     std::cout << ",";
                   }
@@ -608,135 +613,83 @@ void RocksDBHandler::processWorldSection(const int64_t &key, const std::string &
           }
         }
       }
-
-      // exit(-1);
-
-      // std::cout << "World Section Deserialized Successfully:" << std::endl;
-      // std::cout << "Key: " << bswap_id << std::endl;
-      // id = __builtin_bswap64(id);
-      // id = 0x90000010000170;
-      // std::cout << "World " << getLevel(bswap_id) << ": x=" << getX(bswap_id)
-      // << ", y=" << getY(bswap_id) << ", z=" << getZ(bswap_id) << std::endl;
-
-      // if (getLevel(bswap_id) == 0) // we are only interested in the zeroth LOD,
-      //                              // idk why its stored in getLevel
-      // {
-      //   for (int x = 0; x < 32; x++)
-      //   {
-      //     for (int y = 0; y < 32; y++)
-      //     {
-      //       for (int z = 0; z < 32; z++)
-      //       {
-      //         // x, y, z, selfBlockId, key
-      //         // should be 0, 0, 16, 2, 4503599358935040
-      //         // std::cout << getIndex(0, 1, 16) << std::endl;
-      //         // std::cout << section.data[getIndex(x, y, z)] << std::endl;
-      //         // std::cout << mappings[section.data[getIndex(0, 1, 16)]] <<
-      //         // std::endl;
-
-      //         // filter out air
-
-      //         int64_t bid = getBlockId(section.data[getIndex(x, y, z)]);
-
-      //         if (bid != 0)
-      //         {
-      //           // std::cout << "World " << getLevel(bswap_id) << ": x=" <<
-      //           // getX(bswap_id) * 32 + x << ", y=" << getY(bswap_id) * 32 + y
-      //           // << ", z=" << getZ(bswap_id) * 32 + z << std::endl; std::cout
-      //           // << "x: " << x << " y: " << y << " z: " << z << std::endl;
-      //           // std::cout << section.data[getIndex(x, y, z)] << std::endl;
-      //           // std::cout << bid << std::endl;
-      //           // std::cout << section.data[getIndex(x, y, z)] << std::endl;
-      //           // std::cout << mappings[bid] << std::endl;
-      //           nbt::tag_compound &block =
-      //               mappings[bid].as<nbt::tag_compound>();
-      //           // std::cout << block.at("Name") << std::endl;
-      //           // std::cout << block << std::endl;
-
-      //           // mappings
-
-      //           // std::cout << "{";
-
-      //           // std::cout << '"' << "x" << '"' << ":" << getX(bswap_id) * 32
-      //           // + x << ","; std::cout << '"' << "y" << '"' << ":" <<
-      //           // getY(bswap_id) * 32 + y << ","; std::cout << '"' << "z" <<
-      //           // '"' << ":" << getZ(bswap_id) * 32 + z << ",";
-
-      //           // for (const auto &kv : block)
-      //           // {
-      //           //   if (kv.first == "Properties")
-      //           //   {
-      //           //     std::cout << '"' << "Properties" << '"' << ":{";
-      //           //     const auto &properties =
-      //           //     block.at("Properties").as<nbt::tag_compound>(); auto it =
-      //           //     properties.begin(); while (it != properties.end())
-      //           //     {
-      //           //       std::cout << '"' << it->first << '"' << ":" <<
-      //           //       it->second;
-      //           //       ++it;
-      //           //       if (it != properties.end())
-      //           //       {
-      //           //         std::cout << ",";
-      //           //       }
-      //           //       // std::cout << std::endl;
-      //           //     }
-      //           //     std::cout << "}"; // No comma here, we will handle it
-      //           //     later
-      //           //   }
-      //           //   else
-      //           //   {
-      //           //     std::cout << '"' << kv.first << '"' << ":" << kv.second;
-      //           //   }
-
-      //           //   // Add a comma if there are more elements or properties
-      //           //   if (kv.first != "Properties" &&
-      //           //   block.has_key("Properties"))
-      //           //   {
-      //           //     std::cout << ",";
-      //           //   }
-      //           // }
-
-      //           // // Remove trailing comma after the last element
-      //           // std::cout << "}" << std::endl;
-      // }
-      // }
-      // }
-
-      // delete it_world_sections;
     }
   }
 }
 
 void RocksDBHandler::processWorldSections()
 {
-  rocksdb::Iterator *it_world_sections = db->NewIterator(rocksdb::ReadOptions(), handles[1]);
-  std::vector<std::thread> workers;
+    rocksdb::Iterator *it_world_sections = db->NewIterator(rocksdb::ReadOptions(), handles[1]);
+    const unsigned int num_threads = std::thread::hardware_concurrency();  // Get the number of CPU threads
+    std::vector<std::thread> workers;
+    std::mutex queue_mutex;
+    std::condition_variable cv;
+    std::queue<std::pair<int64_t, std::string>> task_queue;
+    bool stop = false;
 
-  // Iterate over world sections
-  for (it_world_sections->SeekToFirst(); it_world_sections->Valid(); it_world_sections->Next())
-  {
-    rocksdb::Slice key_swapped = it_world_sections->key();
-    int64_t key;
+    // Worker function for the thread pool
+    auto worker_func = [&]() {
+        while (true) {
+            std::pair<int64_t, std::string> task;
 
-    memcpy(&key, key_swapped.data(), key_swapped.size());
-    key = __builtin_bswap64(key);
+            // Lock the task queue and wait for tasks
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex);
+                cv.wait(lock, [&] { return !task_queue.empty() || stop; });
 
-    std::string compressed_value = it_world_sections->value().ToString();
+                if (stop && task_queue.empty())
+                    return;  // Exit if no more tasks and stop is set
 
-    // Create a thread for each world section
-    workers.emplace_back(&RocksDBHandler::processWorldSection, this, key, compressed_value);
-  }
+                task = std::move(task_queue.front());
+                task_queue.pop();
+            }
 
-  // Wait for all threads to finish
-  for (auto &worker : workers)
-  {
-    if (worker.joinable())
-    {
-      worker.join();
+            // Process the task
+            processWorldSection(task.first, task.second);
+        }
+    };
+
+    // Spawn worker threads based on the number of CPU threads
+    for (unsigned int i = 0; i < num_threads; ++i) {
+        workers.emplace_back(worker_func);
     }
-  }
 
-  delete it_world_sections;
+    // Iterate over world sections and add tasks to the queue
+    for (it_world_sections->SeekToFirst(); it_world_sections->Valid(); it_world_sections->Next()) {
+        rocksdb::Slice key_swapped = it_world_sections->key();
+        int64_t key;
+
+        memcpy(&key, key_swapped.data(), key_swapped.size());
+        key = __builtin_bswap64(key);
+
+        std::string compressed_value = it_world_sections->value().ToString();
+
+        // Add task to the queue
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            task_queue.emplace(key, compressed_value);
+        }
+
+        // Notify a waiting thread that a new task is available
+        cv.notify_one();
+    }
+
+    // Signal the threads to stop after processing all tasks
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        stop = true;
+    }
+
+    cv.notify_all();
+
+    // Join all worker threads
+    for (auto &worker : workers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
+    delete it_world_sections;
 }
 
 void RocksDBHandler::readIdMappings()
@@ -829,8 +782,8 @@ int main()
   try
   {
 
-    // std::string storagePath = "../.voxy/saves/89.168.27.174/0ede3c4bcf2e01e7d3e7fc317625ccae/storage/";
-    std::string storagePath = "/home/edward_wong/.local/share/PrismLauncher/instances/voxy testing/minecraft/saves/flatworld/voxy/28efa274f43b4686e310ba5f3fb11fbb/storage/";
+    std::string storagePath = "../.voxy/saves/89.168.27.174/9f24721cf6af1d30bacc19de8c77a9b6/storage/";
+    // std::string storagePath = "/home/edward_wong/.local/share/PrismLauncher/instances/voxy testing/minecraft/saves/flatworld/voxy/28efa274f43b4686e310ba5f3fb11fbb/storage/";
     RocksDBHandler dbHandler(storagePath);
     dbHandler.readIdMappings();
     dbHandler.processWorldSections();

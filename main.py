@@ -1,34 +1,69 @@
+import sys
+import json
 import amulet
 from amulet.api.block import Block
 
-# level = amulet.load_level("/tmp/world")
-level = amulet.load_level("empty")
+from amulet_nbt import StringTag
 
-game_version = ("java", (1, 20, 1))  # the version that we want the block data in.
+def process_block_data(data, level, game_version):
+    try:
+        # Extract x, y, z, block name, and properties from the JSON input
+        x = data.get("x")
+        y = data.get("y")
+        z = data.get("z")
+        block_name = data.get("Name")
+        properties = data.get("Properties", {})  # Get properties, default to empty dict
+        # print(properties)
+        processed_properties = {}
+        for value in properties:
+            processed_properties[value] = StringTag(properties[value])
+            # match properties[value][1]: # the type
+            #     case "string":
+            #         processed_properties[value] = StringTag(properties[value][0])
+            #     case "string":
+            #         processed_properties[value] = StringTag(properties[value][0])
+        # print(processed_properties)
+        if x is None or y is None or z is None or block_name is None:
+            print(f"Invalid data: {data}")
+            return
 
-block, block_entity = level.get_version_block(
-    0,  # x location
-    0,  # y location
-    0,  # z location
-    "minecraft:overworld",  # dimension
-    game_version,
-)
+        # Create a Block object with the specified block name and properties
+        namespace, base_name = block_name.split(":")
+        block = Block(namespace, base_name, processed_properties)
 
-if isinstance(block, Block):
-    # Check that what we have is actually a block.
-    # There are some edge cases such as item frames where the returned value might not be a Block.
-    print(block)
-    # Block(minecraft:air)
+        # Set the block in the world at the specified coordinates
+        level.set_version_block(
+            x,
+            y,
+            z,
+            "minecraft:overworld",  # Dimension
+            game_version,
+            block,
+        )
+        # print(f"Set block '{block_name}' with properties {properties} at ({x}, {y}, {z})")
+    
+    except Exception as e:
+        print(f"Error processing block data {data}: {e}")
 
-block = Block("minecraft", "stone")
-level.set_version_block(
-    0,  # x location
-    70,  # y location
-    0,  # z location
-    "minecraft:overworld",  # dimension
-    game_version,
-    block,
-)
+def main():
+    game_version = ("java", (1, 20, 1))  # Specify the game version
+    level_path = "empty"  # Path to the Minecraft world
+    level = amulet.load_level(level_path)
 
-# level.save()
-level.close()
+    try:
+        # Read line-buffered JSON input from stdin
+        for line in sys.stdin:
+            try:
+                # Parse the JSON string into a dictionary
+                block_data = json.loads(line.strip())
+                process_block_data(block_data, level, game_version)
+            except json.JSONDecodeError:
+                print(f"Invalid JSON input: {line.strip()}")
+
+    finally:
+        # Make sure to close the level and save any changes
+        level.save()  # Uncomment if saving is desired
+        level.close()
+
+if __name__ == "__main__":
+    main()
