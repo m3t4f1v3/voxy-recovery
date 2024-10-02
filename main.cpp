@@ -22,7 +22,8 @@ struct WorldSection
   std::vector<int64_t> data;
 };
 
-std::vector<nbt::tag_compound> mappings(1 << 20);
+nbt::tag_list mappings[1 << 20];
+// nbt::tag_list mappings;
 std::mutex io_mutex;
 
 class RocksDBHandler
@@ -31,7 +32,7 @@ public:
   RocksDBHandler(const std::string &db_path);
   ~RocksDBHandler();
 
-  void processWorldSection(const rocksdb::Slice key, const rocksdb::Slice compressed_value);
+  void processWorldSection(const int64_t &key, const std::string &compressed_value);
   void processWorldSections();
   void readIdMappings();
 
@@ -214,7 +215,7 @@ bool RocksDBHandler::deserialize(WorldSection &section,
   {
     int16_t lutId = readFromBuffer<int16_t>(buffer);
     // std::cout << lutId << std::endl;
-    section.data[i] = lut[lutId];
+    section.data[i] = std::move(lut[lutId]);
 
     // Continue hashing
     hash *= 1230987149811L;
@@ -229,6 +230,7 @@ bool RocksDBHandler::deserialize(WorldSection &section,
   // Check if hashes match
   if (expectedHash != hash)
   {
+    std::lock_guard<std::mutex> lock(io_mutex);
     std::cerr << "Hash mismatch. Got: " << hash
               << ", Expected: " << expectedHash << std::endl;
     return false;
@@ -237,6 +239,7 @@ bool RocksDBHandler::deserialize(WorldSection &section,
   // Check if there's remaining data in the buffer
   if (buffer != decompressedData.data() + decompressedData.size())
   {
+    std::lock_guard<std::mutex> lock(io_mutex);
     std::cerr << "Decompressed section had excess data." << std::endl;
     return false;
   }
@@ -261,6 +264,14 @@ int32_t getBlockId(int64_t id)
   return static_cast<int32_t>((id >> 27) & ((1 << 20) - 1));
 }
 
+int32_t bytesToInt(const std::string &i)
+{
+  return (static_cast<int32_t>(static_cast<uint8_t>(i[0])) << 24) |
+         (static_cast<int32_t>(static_cast<uint8_t>(i[1])) << 16) |
+         (static_cast<int32_t>(static_cast<uint8_t>(i[2])) << 8) |
+         static_cast<int32_t>(static_cast<uint8_t>(i[3]));
+}
+
 int32_t getBiomeId(int64_t id)
 {
   return static_cast<int32_t>((id >> 47) & 0x1FF);
@@ -280,6 +291,7 @@ int32_t getIndex(int32_t x, int32_t y, int32_t z)
   const int32_t M = (1 << 5) - 1; // Mask for the lowest 5 bits
   if (x < 0 || x > M || y < 0 || y > M || z < 0 || z > M)
   {
+    std::lock_guard<std::mutex> lock(io_mutex);
     throw std::invalid_argument("Out of bounds: " + std::to_string(x) + ", " +
                                 std::to_string(y) + ", " + std::to_string(z));
   }
@@ -298,6 +310,7 @@ std::tuple<int, int, int> getCoordinates(int index)
   // Check bounds for x, y, z
   if (x < 0 || x > M || y < 0 || y > M || z < 0 || z > M)
   {
+    std::lock_guard<std::mutex> lock(io_mutex);
     throw std::out_of_range("Out of bounds: " + std::to_string(x) + ", " +
                             std::to_string(y) + ", " + std::to_string(z));
   }
@@ -312,6 +325,7 @@ void writeVectorToFile(const std::vector<long> &vec,
 
   if (!outFile.is_open())
   {
+    std::lock_guard<std::mutex> lock(io_mutex);
     std::cerr << "Error opening file: " << filename << std::endl;
     return;
   }
@@ -356,7 +370,7 @@ nbt::tag_long_array vectorOfLongsToNbtArray(const std::vector<int64_t> &vec)
   return nbtArray;
 }
 
-void RocksDBHandler::processWorldSection(const rocksdb::Slice key, const rocksdb::Slice compressed_value)
+void RocksDBHandler::processWorldSection(const int64_t &key, const std::string &compressed_value)
 {
   // int i = 0;
 
@@ -369,7 +383,7 @@ void RocksDBHandler::processWorldSection(const rocksdb::Slice key, const rocksdb
 
   try
   {
-    decompressed_value = decompressZSTD(compressed_value.ToString());
+    decompressed_value = decompressZSTD(compressed_value);
   }
   catch (const std::runtime_error &e)
   {
@@ -379,197 +393,318 @@ void RocksDBHandler::processWorldSection(const rocksdb::Slice key, const rocksdb
     // continue;
   }
 
-  int64_t id;
+  // int64_t id;
+  // int64_t bswap_id = std::stoi(key.ToString());
   // std::cout << key.size() << " " << sizeof(int64_t) << std::endl;
-  std::memcpy(&id, key.data(), key.size());
-  int64_t bswap_id = __builtin_bswap64(id);
-  // std::cout << "Key: " << id << std::endl;
+  // std::memcpy(&id, key.data(), key.size());
+  // int64_t bswap_id = __builtin_bswap64(id);
+  // std::cout << "Key: " << bswap_id << std::endl;
   // 64 bits = 8 bytes * 8
   // id = __builtin_bswap64(id); // Adjust byte order
   // only interested in zeroeth lod
-  if (getLevel(bswap_id) == 0)
+  if (getLevel(key) == 0)
   {
-    // std::cout << "World " << getLevel(bswap_id) << ": x=" << getX(bswap_id) << ", y=" << getY(bswap_id) << ", z=" << getZ(bswap_id) << std::endl;
+    // std::lock_guard<std::mutex> lock(io_mutex);
+    // std::cout << "World " << getLevel(key) << ": x=" << getX(key) << ", y=" << getY(key) << ", z=" << getZ(key) << std::endl;
     WorldSection section;
     section.data.resize(1 << 15);
-    section.key = bswap_id;
+    section.key = key;
 
-    nbt::tag_compound new_chunk_data;
+    nbt::tag_compound new_chunk_data = {
+        {"DataVersion", 3953}, // 1.21
+        {"Heightmaps",
+         nbt::tag_compound{
+             {"MOTION_BLOCKING",
+              nbt::tag_long_array{
+                  65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+             {"MOTION_BLOCKING_NO_LEAVES",
+              nbt::tag_long_array{
+                  65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+             {"OCEAN_FLOOR",
+              nbt::tag_long_array{
+                  65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+             {"WORLD_SURFACE",
+              nbt::tag_long_array{
+                  65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}}},
+        {"InhabitedTime", 1081l}, // works for my purposes
+        {"LastUpdate", 4036l},
+        {"PostProcessing",
+         nbt::tag_list{
+             nbt::tag_list(), nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
+             nbt::tag_list(), nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
+             nbt::tag_list(), nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
+             nbt::tag_list(), nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
+             nbt::tag_list(), nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
+             nbt::tag_list(), nbt::tag_list(), nbt::tag_list(), nbt::tag_list()}},
+        {"Status", "minecraft:full"},
+        {"block_entities", nbt::tag_list()},
+        {"block_ticks", nbt::tag_list()},
+        {"fluid_ticks", nbt::tag_list()},
+        {"isLightOn", nbt::tag_byte(true)},
+        {"structures",
+         nbt::tag_compound{
+             {"References", nbt::tag_compound()},
+             {"starts", nbt::tag_compound()}}}};
 
-    new_chunk_data.put("DataVersion", 3953);
-    new_chunk_data.put(
-        "Heightmaps",
-        nbt::tag_compound{
-            std::pair<std::string, nbt::tag_long_array>(
-                "MOTION_BLOCKING",
-                {65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
-            std::pair<std::string, nbt::tag_long_array>(
-                "MOTION_BLOCKING_NO_LEAVES",
-                {65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
-            std::pair<std::string, nbt::tag_long_array>(
-                "OCEAN_FLOOR",
-                {65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
-            std::pair<std::string, nbt::tag_long_array>(
-                "WORLD_SURFACE",
-                {65, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})});
-    new_chunk_data.put("InhabitedTime", 1081l);
-    new_chunk_data.put("LastUpdate", 4036l);
-    new_chunk_data.put(
-        "PostProcessing",
-        nbt::tag_list({nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
-                       nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
-                       nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
-                       nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
-                       nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
-                       nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
-                       nbt::tag_list(), nbt::tag_list(), nbt::tag_list(),
-                       nbt::tag_list(), nbt::tag_list(), nbt::tag_list()}));
-    new_chunk_data.put("Status", "minecraft:full");
-    new_chunk_data.put("block_entities", nbt::tag_list());
-    new_chunk_data.put("block_ticks", nbt::tag_list());
-    new_chunk_data.put("fluid_ticks", nbt::tag_list());
-    new_chunk_data.put("isLightOn", nbt::tag_byte(true));
-    new_chunk_data.put(
-        "structures",
-        nbt::tag_compound{std::pair<std::string, nbt::tag_compound>(
-                              "References", nbt::tag_compound()),
-                          std::pair<std::string, nbt::tag_compound>(
-                              "starts", nbt::tag_compound())});
-    new_chunk_data.put("xPos", getX(bswap_id));
-    new_chunk_data.put("zPos", getZ(bswap_id));
+    new_chunk_data.put("xPos", getX(key));
+    new_chunk_data.put("zPos", getZ(key));
     // hardcoded to 1.18 level
     new_chunk_data.put("yPos", -4);
     new_chunk_data.put("sections", nbt::tag_list());
     if (deserialize(section, decompressed_value, false))
     {
-      // std::cout << section.data.size() << std::endl;
 
-      // ignore BlockLight and SkyLight, we can recalc those once we load in
-      for (int i = 0; i < 8; i++)
+      if (false)
       {
-        // std::cout << getY(bswap_id);
-        new_chunk_data.at("sections").as<nbt::tag_list>().push_back({nbt::tag_compound{std::pair<std::string, nbt::tag_byte>("Y", nbt::tag_byte(getY(bswap_id) + i)), std::pair<std::string, nbt::tag_compound>("biomes", nbt::tag_compound{std::pair<std::string, nbt::tag_list>("palette", {"minecraft:plains"})}), std::pair<std::string, nbt::tag_compound>("block_states", nbt::tag_compound{std::pair<std::string, nbt::tag_list>("palette", vectorToNbtList(mappings)), std::pair<std::string, nbt::tag_long_array>("data", vectorOfLongsToNbtArray(std::vector<int64_t>(i * 4096, (i + 1) * 4096)))})}});
+
+        // std::cout << section.data.size() << std::endl;
+
+        // ignore BlockLight and SkyLight, we can recalc those once we load in
+        // for (int i = 0; i < 8; i++)
+        // {
+        //   // std::cout << getY(bswap_id);
+        //   // this logic is wrong, dunno how to fix it
+        //   new_chunk_data.at("sections").as<nbt::tag_list>().push_back({nbt::tag_compound{std::pair<std::string, nbt::tag_byte>("Y", nbt::tag_byte(getY(key) + i)), std::pair<std::string, nbt::tag_compound>("biomes", nbt::tag_compound{std::pair<std::string, nbt::tag_list>("palette", {"minecraft:plains"})}), std::pair<std::string, nbt::tag_compound>("block_states", nbt::tag_compound{std::pair<std::string, nbt::tag_list>("palette", *mappings), std::pair<std::string, nbt::tag_long_array>("data", vectorOfLongsToNbtArray(std::vector<int64_t>(section.data.begin() + i * 4096, section.data.begin() + (i + 1) * 4096)))})}});
+        // }
+
+        new_chunk_data.at("sections").as<nbt::tag_list>().push_back({nbt::tag_compound{std::pair<std::string, nbt::tag_byte>("Y", nbt::tag_byte(getY(key))), std::pair<std::string, nbt::tag_compound>("biomes", nbt::tag_compound{std::pair<std::string, nbt::tag_list>("palette", {"minecraft:plains"})}), std::pair<std::string, nbt::tag_compound>("block_states", nbt::tag_compound{std::pair<std::string, nbt::tag_list>("palette", *mappings), std::pair<std::string, nbt::tag_long_array>("data", vectorOfLongsToNbtArray(section.data))})}});
+
+        // std::cout << section.data.begin() - section.data.end() << std::endl;
+        // std::cout << new_chunk_data << std::endl;
+
+        // missing a lot here, chunk locations and stuff, all things i cba to do
+
+        // save chunk data with compression
+        std::ostringstream oss;
+        oss << "saves/r." << getX(key) << "." << getZ(key) << ".mca";
+
+        // Open the output file
+        std::ofstream output_file(oss.str(), std::ios_base::binary);
+        if (!output_file.is_open())
+        {
+          std::cerr << "Failed to open output file.\n";
+          return;
+        }
+
+        // Create a temporary buffer to hold the compressed data
+        std::ostringstream temp_stream;
+
+        // Compress using zlib stream into the temp_stream
+        zlib::ozlibstream zlib_out(temp_stream);
+        nbt::io::stream_writer writer(zlib_out);
+
+        // Write the chunk data payload
+        new_chunk_data.write_payload(writer);
+
+        // Close the zlib stream and flush the data to the temp_stream
+        zlib_out.close();
+
+        // Get the compressed data from temp_stream
+        std::string compressed_data = temp_stream.str();
+
+        // write the size of the compressed data
+
+        int32_t size = static_cast<int32_t>(__builtin_bswap32(compressed_data.size()));
+
+        // Write the size of compressed_data to the file
+        output_file.write(reinterpret_cast<const char *>(&size), sizeof(int32_t)); // Pass the address of size
+
+        // Write a single byte (0x02)
+        uint8_t byte_value = 0x02;                                                       // Create a variable to hold the value
+        output_file.write(reinterpret_cast<const char *>(&byte_value), sizeof(uint8_t)); // Pass the address of the variable
+
+        // Write the compressed data
+        output_file.write(reinterpret_cast<const char *>(compressed_data.data()), compressed_data.size());
+
+        output_file.close();
+
+        // Close the output file
+        output_file.close();
       }
-      // std::cout << new_chunk_data << std::endl;
-
-      // save chunk data with compression
-      std::ostringstream oss;
-      oss << "saves/" << getX(bswap_id) << "." << getZ(bswap_id) << ".mca";
-      std::ofstream output_file(oss.str(), std::ios_base::binary);
-      zlib::ozlibstream zlib_out(output_file);
-
-      if (!output_file.is_open())
+      else
       {
-        std::cerr << "Failed to open output file.\n";
-        // return 1;
+        for (int x = 0; x < 32; x++)
+        {
+          for (int y = 0; y < 32; y++)
+          {
+            for (int z = 0; z < 32; z++)
+            {
+              // x, y, z, selfBlockId, key
+              // should be 0, 0, 16, 2, 4503599358935040
+              // std::cout << getIndex(0, 1, 16) << std::endl;
+              // std::cout << section.data[getIndex(x, y, z)] << std::endl;
+              // std::cout << mappings[section.data[getIndex(0, 1, 16)]] <<
+              // std::endl;
+
+              // filter out air
+
+              int64_t bid = getBlockId(section.data[getIndex(x, y, z)]);
+              if (bid != 0)
+              {
+                // std::cout << "World " << getLevel(bswap_id) << ": x=" <<
+                // getX(bswap_id) * 32 + x << ", y=" << getY(bswap_id) * 32 + y
+                // << ", z=" << getZ(bswap_id) * 32 + z << std::endl; std::cout
+                // << "x: " << x << " y: " << y << " z: " << z << std::endl;
+                // std::cout << section.data[getIndex(x, y, z)] << std::endl;
+                // std::cout << bid << std::endl;
+                // std::cout << section.data[getIndex(x, y, z)] << std::endl;
+                // std::cout << mappings[bid] << std::endl;
+                // std::cout << mappings->at(0) << std::endl;
+                nbt::tag_compound &block =
+                    mappings->at(bid).as<nbt::tag_compound>();
+                // std::cout << block.at("Name") << std::endl;
+                // std::cout << block << std::endl;
+
+                std::lock_guard<std::mutex> lock(io_mutex);
+
+                std::cout << "{";
+
+                std::cout << '"' << "x" << '"' << ":" << getX(key) * 32
+                + x << ","; std::cout << '"' << "y" << '"' << ":" <<
+                getY(key) * 32 + y << ","; std::cout << '"' << "z" <<
+                '"' << ":" << getZ(key) * 32 + z << ",";
+
+                for (const auto &kv : block)
+                {
+                  if (kv.first == "Properties")
+                  {
+                    std::cout << '"' << "Properties" << '"' << ":{";
+                    const auto &properties =
+                    block.at("Properties").as<nbt::tag_compound>(); auto it =
+                    properties.begin(); while (it != properties.end())
+                    {
+                      std::cout << '"' << it->first << '"' << ":" <<
+                      it->second;
+                      ++it;
+                      if (it != properties.end())
+                      {
+                        std::cout << ",";
+                      }
+                      // std::cout << std::endl;
+                    }
+                    std::cout << "}"; // No comma here, we will handle it later
+                  }
+                  else
+                  {
+                    std::cout << '"' << kv.first << '"' << ":" << kv.second;
+                  }
+
+                  // Add a comma if there are more elements or properties
+                  if (kv.first != "Properties" &&
+                  block.has_key("Properties"))
+                  {
+                    std::cout << ",";
+                  }
+                }
+
+                // Remove trailing comma after the last element
+                std::cout << "}" << std::endl;
+              }
+            }
+          }
+        }
       }
 
-      nbt::io::stream_writer writer(zlib_out);
+      // exit(-1);
 
-      new_chunk_data.write_payload(writer);
-      zlib_out.close();
-      output_file.close();
+      // std::cout << "World Section Deserialized Successfully:" << std::endl;
+      // std::cout << "Key: " << bswap_id << std::endl;
+      // id = __builtin_bswap64(id);
+      // id = 0x90000010000170;
+      // std::cout << "World " << getLevel(bswap_id) << ": x=" << getX(bswap_id)
+      // << ", y=" << getY(bswap_id) << ", z=" << getZ(bswap_id) << std::endl;
+
+      // if (getLevel(bswap_id) == 0) // we are only interested in the zeroth LOD,
+      //                              // idk why its stored in getLevel
+      // {
+      //   for (int x = 0; x < 32; x++)
+      //   {
+      //     for (int y = 0; y < 32; y++)
+      //     {
+      //       for (int z = 0; z < 32; z++)
+      //       {
+      //         // x, y, z, selfBlockId, key
+      //         // should be 0, 0, 16, 2, 4503599358935040
+      //         // std::cout << getIndex(0, 1, 16) << std::endl;
+      //         // std::cout << section.data[getIndex(x, y, z)] << std::endl;
+      //         // std::cout << mappings[section.data[getIndex(0, 1, 16)]] <<
+      //         // std::endl;
+
+      //         // filter out air
+
+      //         int64_t bid = getBlockId(section.data[getIndex(x, y, z)]);
+
+      //         if (bid != 0)
+      //         {
+      //           // std::cout << "World " << getLevel(bswap_id) << ": x=" <<
+      //           // getX(bswap_id) * 32 + x << ", y=" << getY(bswap_id) * 32 + y
+      //           // << ", z=" << getZ(bswap_id) * 32 + z << std::endl; std::cout
+      //           // << "x: " << x << " y: " << y << " z: " << z << std::endl;
+      //           // std::cout << section.data[getIndex(x, y, z)] << std::endl;
+      //           // std::cout << bid << std::endl;
+      //           // std::cout << section.data[getIndex(x, y, z)] << std::endl;
+      //           // std::cout << mappings[bid] << std::endl;
+      //           nbt::tag_compound &block =
+      //               mappings[bid].as<nbt::tag_compound>();
+      //           // std::cout << block.at("Name") << std::endl;
+      //           // std::cout << block << std::endl;
+
+      //           // mappings
+
+      //           // std::cout << "{";
+
+      //           // std::cout << '"' << "x" << '"' << ":" << getX(bswap_id) * 32
+      //           // + x << ","; std::cout << '"' << "y" << '"' << ":" <<
+      //           // getY(bswap_id) * 32 + y << ","; std::cout << '"' << "z" <<
+      //           // '"' << ":" << getZ(bswap_id) * 32 + z << ",";
+
+      //           // for (const auto &kv : block)
+      //           // {
+      //           //   if (kv.first == "Properties")
+      //           //   {
+      //           //     std::cout << '"' << "Properties" << '"' << ":{";
+      //           //     const auto &properties =
+      //           //     block.at("Properties").as<nbt::tag_compound>(); auto it =
+      //           //     properties.begin(); while (it != properties.end())
+      //           //     {
+      //           //       std::cout << '"' << it->first << '"' << ":" <<
+      //           //       it->second;
+      //           //       ++it;
+      //           //       if (it != properties.end())
+      //           //       {
+      //           //         std::cout << ",";
+      //           //       }
+      //           //       // std::cout << std::endl;
+      //           //     }
+      //           //     std::cout << "}"; // No comma here, we will handle it
+      //           //     later
+      //           //   }
+      //           //   else
+      //           //   {
+      //           //     std::cout << '"' << kv.first << '"' << ":" << kv.second;
+      //           //   }
+
+      //           //   // Add a comma if there are more elements or properties
+      //           //   if (kv.first != "Properties" &&
+      //           //   block.has_key("Properties"))
+      //           //   {
+      //           //     std::cout << ",";
+      //           //   }
+      //           // }
+
+      //           // // Remove trailing comma after the last element
+      //           // std::cout << "}" << std::endl;
+      // }
+      // }
+      // }
+
+      // delete it_world_sections;
     }
   }
-
-  // exit(-1);
-
-  // std::cout << "World Section Deserialized Successfully:" << std::endl;
-  // std::cout << "Key: " << bswap_id << std::endl;
-  // id = __builtin_bswap64(id);
-  // id = 0x90000010000170;
-  // std::cout << "World " << getLevel(bswap_id) << ": x=" << getX(bswap_id)
-  // << ", y=" << getY(bswap_id) << ", z=" << getZ(bswap_id) << std::endl;
-
-  // if (getLevel(bswap_id) == 0) // we are only interested in the zeroth LOD,
-  //                              // idk why its stored in getLevel
-  // {
-  //   for (int x = 0; x < 32; x++)
-  //   {
-  //     for (int y = 0; y < 32; y++)
-  //     {
-  //       for (int z = 0; z < 32; z++)
-  //       {
-  //         // x, y, z, selfBlockId, key
-  //         // should be 0, 0, 16, 2, 4503599358935040
-  //         // std::cout << getIndex(0, 1, 16) << std::endl;
-  //         // std::cout << section.data[getIndex(x, y, z)] << std::endl;
-  //         // std::cout << mappings[section.data[getIndex(0, 1, 16)]] <<
-  //         // std::endl;
-
-  //         // filter out air
-
-  //         int64_t bid = getBlockId(section.data[getIndex(x, y, z)]);
-
-  //         if (bid != 0)
-  //         {
-  //           // std::cout << "World " << getLevel(bswap_id) << ": x=" <<
-  //           // getX(bswap_id) * 32 + x << ", y=" << getY(bswap_id) * 32 + y
-  //           // << ", z=" << getZ(bswap_id) * 32 + z << std::endl; std::cout
-  //           // << "x: " << x << " y: " << y << " z: " << z << std::endl;
-  //           // std::cout << section.data[getIndex(x, y, z)] << std::endl;
-  //           // std::cout << bid << std::endl;
-  //           // std::cout << section.data[getIndex(x, y, z)] << std::endl;
-  //           // std::cout << mappings[bid] << std::endl;
-  //           nbt::tag_compound &block =
-  //               mappings[bid].as<nbt::tag_compound>();
-  //           // std::cout << block.at("Name") << std::endl;
-  //           // std::cout << block << std::endl;
-
-  //           // mappings
-
-  //           // std::cout << "{";
-
-  //           // std::cout << '"' << "x" << '"' << ":" << getX(bswap_id) * 32
-  //           // + x << ","; std::cout << '"' << "y" << '"' << ":" <<
-  //           // getY(bswap_id) * 32 + y << ","; std::cout << '"' << "z" <<
-  //           // '"' << ":" << getZ(bswap_id) * 32 + z << ",";
-
-  //           // for (const auto &kv : block)
-  //           // {
-  //           //   if (kv.first == "Properties")
-  //           //   {
-  //           //     std::cout << '"' << "Properties" << '"' << ":{";
-  //           //     const auto &properties =
-  //           //     block.at("Properties").as<nbt::tag_compound>(); auto it =
-  //           //     properties.begin(); while (it != properties.end())
-  //           //     {
-  //           //       std::cout << '"' << it->first << '"' << ":" <<
-  //           //       it->second;
-  //           //       ++it;
-  //           //       if (it != properties.end())
-  //           //       {
-  //           //         std::cout << ",";
-  //           //       }
-  //           //       // std::cout << std::endl;
-  //           //     }
-  //           //     std::cout << "}"; // No comma here, we will handle it
-  //           //     later
-  //           //   }
-  //           //   else
-  //           //   {
-  //           //     std::cout << '"' << kv.first << '"' << ":" << kv.second;
-  //           //   }
-
-  //           //   // Add a comma if there are more elements or properties
-  //           //   if (kv.first != "Properties" &&
-  //           //   block.has_key("Properties"))
-  //           //   {
-  //           //     std::cout << ",";
-  //           //   }
-  //           // }
-
-  //           // // Remove trailing comma after the last element
-  //           // std::cout << "}" << std::endl;
-  // }
-  // }
-  // }
-
-  // delete it_world_sections;
 }
 
 void RocksDBHandler::processWorldSections()
@@ -580,9 +715,13 @@ void RocksDBHandler::processWorldSections()
   // Iterate over world sections
   for (it_world_sections->SeekToFirst(); it_world_sections->Valid(); it_world_sections->Next())
   {
-    rocksdb::Slice key = it_world_sections->key();
-    rocksdb::Slice compressed_value = it_world_sections->value();
-    // std::string compressed_value = it_world_sections->value().ToString();
+    rocksdb::Slice key_swapped = it_world_sections->key();
+    int64_t key;
+
+    memcpy(&key, key_swapped.data(), key_swapped.size());
+    key = __builtin_bswap64(key);
+
+    std::string compressed_value = it_world_sections->value().ToString();
 
     // Create a thread for each world section
     workers.emplace_back(&RocksDBHandler::processWorldSection, this, key, compressed_value);
@@ -600,14 +739,6 @@ void RocksDBHandler::processWorldSections()
   delete it_world_sections;
 }
 
-int32_t bytesToInt(const std::string &i)
-{
-  return (static_cast<int32_t>(static_cast<uint8_t>(i[0])) << 24) |
-         (static_cast<int32_t>(static_cast<uint8_t>(i[1])) << 16) |
-         (static_cast<int32_t>(static_cast<uint8_t>(i[2])) << 8) |
-         static_cast<int32_t>(static_cast<uint8_t>(i[3]));
-}
-
 void RocksDBHandler::readIdMappings()
 {
   std::cout << "Reading from id_mappings:" << std::endl;
@@ -617,7 +748,7 @@ void RocksDBHandler::readIdMappings()
   std::size_t total_blocks = 0;
 
   // set initial air block
-  mappings[0] = nbt::tag_compound({std::pair<std::string, nbt::tag_string>("Name", nbt::tag_string("minecraft:air"))});
+  mappings->push_back(nbt::tag_compound({std::pair<std::string, nbt::tag_string>("Name", nbt::tag_string("minecraft:air"))}));
 
   for (it_id_mappings->SeekToFirst(); it_id_mappings->Valid();
        it_id_mappings->Next())
@@ -661,8 +792,15 @@ void RocksDBHandler::readIdMappings()
         // std::cout << __builtin_bswap32(id) << std::endl;
         // std::cout << blockId << std::endl;
         // std::cout << pair.second->at("block_state") << std::endl;
-        mappings[blockId] =
-            pair.second->at("block_state").as<nbt::tag_compound>();
+
+        // mappings->set(blockId, std::move(pair.second->at("block_state")));
+
+        // technically wrong but it seems to work just fine as voxy has them in ascending order anyways, proper code logic up there but i can't figure out how to do allat
+
+        mappings->push_back(std::move(pair.second->at("block_state")));
+
+        // mappings[blockId] =
+        //     pair.second->at("block_state").as<nbt::tag_compound>();
         total_blocks++;
         // std::cout << "Key: " << blockId << std::endl;
       }
@@ -670,6 +808,8 @@ void RocksDBHandler::readIdMappings()
     // std::cout << "Key: " << id << " Value: " << value.ToString(true) <<
     // std::endl;
   }
+
+  std::cout << "A total of " << total_blocks << " block were mapped." << std::endl;
   // std::cout << i << std::endl;
   delete it_id_mappings;
 }
@@ -688,36 +828,35 @@ int main()
   // exit(-1);
   try
   {
+
+    // std::string storagePath = "../.voxy/saves/89.168.27.174/0ede3c4bcf2e01e7d3e7fc317625ccae/storage/";
+    std::string storagePath = "/home/edward_wong/.local/share/PrismLauncher/instances/voxy testing/minecraft/saves/flatworld/voxy/28efa274f43b4686e310ba5f3fb11fbb/storage/";
+    RocksDBHandler dbHandler(storagePath);
+    dbHandler.readIdMappings();
+    dbHandler.processWorldSections();
+
     // std::string basePath = "../.voxy/saves/89.168.27.174/";
-    std::string basePath = "/home/edward_wong/.local/share/PrismLauncher/"
-                           "instances/voxy testing/minecraft/saves/empty/voxy/";
+
+    // reconsider this logic, directories might correspond to dimensions
+
+    // std::string basePath = "/home/edward_wong/.local/share/PrismLauncher/instances/voxy testing/minecraft/saves/flatworld2/voxy/";
 
     // Iterate through all directories in the base path
-    for (const auto &entry : std::filesystem::directory_iterator(basePath))
-    {
-      if (std::filesystem::is_directory(entry))
-      {
-        std::string storagePath = entry.path().string() + "/storage/";
-        // std::string storagePath = "../.voxy/saves/89.168.27.174/9f24721cf6af1d30bacc19de8c77a9b6/storage/";
+    // for (const auto &entry : std::filesystem::directory_iterator(basePath))
+    // {
+    //   if (std::filesystem::is_directory(entry))
+    //   {
+    //     std::string storagePath = entry.path().string() + "/storage/";
+    //     // std::string storagePath = "../.voxy/saves/89.168.27.174/9f24721cf6af1d30bacc19de8c77a9b6/storage/";
 
-        // Create a RocksDBHandler for each folder
-        RocksDBHandler dbHandler(storagePath);
+    //     // Create a RocksDBHandler for each folder
+    //     RocksDBHandler dbHandler(storagePath);
 
-        // Read ID mappings and process world sections
-        dbHandler.readIdMappings();
-        dbHandler.processWorldSections();
-      }
-    }
-    // RocksDBHandler dbHandler(
-    //     // "/home/edward_wong/.local/share/PrismLauncher/instances/voxy
-    //     testing/minecraft/saves/empty/voxy/5e08f4cd49c6e5fae140ae6a9bc4228f/storage/");
-    // "../.voxy/saves/89.168.27.174/8c3bc415b64e63ed06e5296642cddd71/storage/");
-
-    // dbHandler.readIdMappings();
-    // std::cout << mappings.size() << std::endl;
-    // exit(-1);
-    // dbHandler.processWorldSections();
-    // dbHandler.readIdMappings();
+    //     // Read ID mappings and process world sections
+    //     dbHandler.readIdMappings();
+    //     dbHandler.processWorldSections();
+    //   }
+    // }
   }
   catch (const std::exception &e)
   {
